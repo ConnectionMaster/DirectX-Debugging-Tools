@@ -7,6 +7,43 @@ const AutoBreadcrumbsBufferSizeInBytes = 65536;
 const AutoBreadcrumbsCommandHistoryOffset = 4096;
 const AutoBreadcrumbsCommandHistoryMax = (AutoBreadcrumbsBufferSizeInBytes - AutoBreadcrumbsCommandHistoryOffset) / 4;
 
+var opStrings = {};
+
+function getEnumString(val, enumType)
+{
+    var keys = Object.keys(opStrings);
+    if (keys.length == 0)
+    {
+        // Build the opStrings dictionary
+        for (var enumerantName of Object.getOwnPropertyNames(enumType.fields))
+        {
+            var enumerant = enumType.fields[enumerantName];
+            opStrings[enumerant.value] = enumerantName;
+        }
+    }
+
+    var key = val.value;
+    if (opStrings.hasOwnProperty(key))
+    {
+        return opStrings[key];
+    }
+
+    return "Unknown";
+}
+
+function getContextTable(node)
+{
+    var contextTable = {};
+
+    // Create a dictionary of breadcrumb contexts keyed by the breadcrumb index
+    for(var i = 0; i < node.BreadcrumbContextsCount; ++i)
+    {
+        contextTable[node.pBreadcrumbContexts[i].BreadcrumbIndex] = i;
+    }
+
+    return contextTable;
+}
+
 function initializeScript()
 {
     var symbolSource = "";
@@ -21,7 +58,8 @@ function initializeScript()
 
         toString()
         {
-            return "Op: " + this.__op + (this.__context ? ", Context: " + this.__context : "");
+            var opName = getEnumString(this.__op, host.getModuleType(symbolSource, "D3D12_AUTO_BREADCRUMB_OP"));
+            return opName + (this.__context ? ", Name: " + host.memory.readWideString(this.__context) : "");
         }
 
         get Op() { return this.__op;}
@@ -34,8 +72,13 @@ function initializeScript()
         constructor(node)
         {
             this.__node = node;
-            this.__completedOp = node.pLastBreadcrumbValue.dereference();
+            this.__numCompletedOps = node.pLastBreadcrumbValue.dereference();
             this.__numOps = node.BreadcrumbCount;
+        }
+
+        toString()
+        {
+            return "Count: " + this.__numCompletedOps;
         }
 
         *[Symbol.iterator]()
@@ -44,34 +87,24 @@ function initializeScript()
             {
                 host.diagnostics.debugLog("Number of command operations exceeds " + AutoBreadcrumbsCommandHistoryMax + ", the capacity of the AutoBreadcrumb command history")
                 var totalDroppedCount = this.__numOps - AutoBreadcrumbsCommandHistoryMax;
-                var completedDroppedCount = max(0, this.__completedOp - totalDroppedCount);
+                var completedDroppedCount = max(0, this.__numCompletedOps - totalDroppedCount);
                 host.diagnostics.debugLog("Total commands dropped: " + totalDroppedCount);
                 host.diagnostics.debugLog("Completed commands dropped: " + completedDroppedCount);
             }
 
-            var count = 0;
-            
-            // Seek to the last context index less than or equal to the completed op index
-            var contextIndex = 0;
-            while(contextIndex < this.__node.BreadcrumbContextsCount && this.__node.pBreadcrumbContexts[contextIndex].BreadcrumbIndex < this.__completedOp)
-            {
-                contextIndex++;
-            }
-            contextIndex--;
+            var contextTable = getContextTable(this.__node);
 
             // Iterate through each completed op and output the BreadcrumbOp
-            while(count < this.__completedOp && count < AutoBreadcrumbsCommandHistoryMax)
+            for(var count = 0; count < this.__numCompletedOps && count < AutoBreadcrumbsCommandHistoryMax; count++)
             {
-                var contextString = null;
-                var index = this.__completedOp - count - 1;
-                if(contextIndex >= 0 && this.__node.pBreadcrumbContexts[contextIndex].BreadcrumbIndex == index)
-                {
-                    contextString = this.__node.pBreadcrumbContexts[contextIndex].pContextString;
-                    contextIndex--;
-                }
-                count++;
-                var modIndex = index % AutoBreadcrumbsCommandHistoryMax;
+                var index = this.__numCompletedOps - count - 1;
                 var op = host.typeSystem.marshalAs(this.__node.pCommandHistory[index], symbolSource, "D3D12_AUTO_BREADCRUMB_OP");
+                
+                var contextString = null;
+                if(contextTable.hasOwnProperty(index))
+                {
+                    contextString = this.__node.pBreadcrumbContexts[contextTable[index]].pContextString;
+                }
                 yield new BreadcrumbOp(op, contextString);
             }
         }
@@ -83,40 +116,39 @@ function initializeScript()
         constructor(node)
         {
             this.__node = node;
-            this.__completedOp = node.pLastBreadcrumbValue.dereference();
+            this.__numCompletedOps = node.pLastBreadcrumbValue.dereference();
             this.__numOps = node.BreadcrumbCount;
+        }
+
+        toString()
+        {
+            return "Count: " + (this.__numOps - this.__numCompletedOps);
         }
 
         *[Symbol.iterator]()
         {
-            var outstanding = this.__numOps - this.__completedOp;
+            var outstanding = this.__numOps - this.__numCompletedOps;
             var dropped = outstanding - AutoBreadcrumbsCommandHistoryMax;
             var remaining = outstanding - dropped;
             if( dropped > 0 )
             {
                 host.diagnostics.debugLog("Only the last " + remaining + " of " + outstanding + " outstanding operations are available\n");
             }
-            var start = Math.max(this.__completedOp, this.__numOps - AutoBreadcrumbsCommandHistoryMax);
+            var start = Math.max(this.__numCompletedOps, this.__numOps - AutoBreadcrumbsCommandHistoryMax);
 
-            // Seek to the first contex index not less than the completed op index
-            var contextIndex = 0;
-            while(contextIndex < this.__node.BreadcrumbContextsCount && this.__node.pBreadcrumbContexts[contextIndex].BreadcrumbIndex < this.__completedOp)
-            {
-                contextIndex++;
-            }
+            var contextTable = getContextTable(this.__node);
 
             for(var opIndex = start; opIndex < this.__numOps; ++opIndex)
             {
-                var contextString = null;
                 var index = opIndex % AutoBreadcrumbsCommandHistoryMax;
-                if(contextIndex < this.__node.BreadcrumbContextsCount && 
-                    this.__node.pBreadcrumbContexts[contextIndex].BreadcrumbIndex == index)
+                var op = host.typeSystem.marshalAs(this.__node.pCommandHistory[index], symbolSource, "D3D12_AUTO_BREADCRUMB_OP");
+
+                var contextString = null;
+                if(contextTable.hasOwnProperty(index))
                 {
-                    contextString = this.__node.pBreadcrumbContexts[contextIndex].pContextString;
-                    contextIndex++;
+                    contextString = this.__node.pBreadcrumbContexts[contextTable[index]].pContextString;
                 }
                 
-                var op = host.typeSystem.marshalAs(this.__node.pCommandHistory[index], symbolSource, "D3D12_AUTO_BREADCRUMB_OP");
                 yield new BreadcrumbOp(op, contextString);
             }
         }
