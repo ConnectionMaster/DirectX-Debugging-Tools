@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation. All rights reserved.
+// Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
 "use strict";
@@ -162,6 +162,11 @@ function initializeScript()
             this.__contextCount = node.BreadcrumbContextsCount;
         }
 
+        toString()
+        {
+            return "Count: " + this.__contextCount;
+        }
+
         *[Symbol.iterator]()
         {
             for(var i = 0; i < this.__contextCount; ++i)
@@ -188,6 +193,11 @@ function initializeScript()
     // Visualizer class for D3D12_AUTO_BREADCRUMB_NODE
     class AutoBreadcrumbNodeVis
     {
+        toString()
+        {
+            var NumCompletedAutoBreadcrumbOps = this.pLastBreadcrumbValue.dereference();
+            return "Completed Ops: " + NumCompletedAutoBreadcrumbOps + "/" + this.BreadcrumbCount;
+        }
         get CommandListDebugName() { return SelectNameHelper(this.pCommandListDebugNameA, this.pCommandListDebugNameW);}
         get CommandQueueDebugName() { return SelectNameHelper(this.pCommandQueueDebugNameA, this.pCommandQueueDebugNameW);}
         get NumCompletedAutoBreadcrumbOps() { return this.pLastBreadcrumbValue.dereference(); }
@@ -304,6 +314,11 @@ function initializeScript()
     // Visualizer class for D3D12_DEVICE_REMOVED_EXTENDED_DATA3
     class DeviceRemovedExtendedData3Vis
     {
+        toString()
+        {
+            return "DeviceState: " + this.DeviceState.toString();
+        }
+
         get DeviceState()
         {
             return host.typeSystem.marshalAs(this.DeviceState, symbolSource, "D3D12_DRED_DEVICE_STATE");
